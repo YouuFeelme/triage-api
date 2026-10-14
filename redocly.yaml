@@ -1,0 +1,7 @@
+# Redocly CLI config: `npx @redocly/cli lint` picks this up automatically.
+extends:
+  - recommended
+
+rules:
+  # The only server for now is local development. The public AWS URL is added in phase 8.
+  no-server-example.com: off
