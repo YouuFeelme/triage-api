@@ -1,0 +1,1305 @@
+openapi: 3.1.0
+info:
+  title: triage-api
+  version: 0.1.0
+  summary: Helpdesk ticketing API — customers open tickets, agents work them, admins see metrics.
+  description: |
+    Backend for a support helpdesk, designed with debuggability in mind.
+
+    **Conventions**
+    - Base path `/api/v1`, JSON bodies, `camelCase` fields.
+    - Every response includes an `X-Request-Id` header. Send your own to correlate client and server logs.
+    - Errors follow RFC 9457 (`application/problem+json`) and always include a stable `code` and the `requestId`.
+    - Access tokens are JWTs valid for 15 minutes. Use `/auth/refresh` to get a new pair; refresh tokens rotate on every use.
+
+    See `docs/design.md` for the reasoning behind these choices.
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: Samuel Echavarría
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+tags:
+  - name: Health
+    description: Liveness and readiness probes
+  - name: Auth
+    description: Registration, login and token lifecycle
+  - name: Users
+    description: Current user and user administration
+  - name: Tickets
+    description: Ticket CRUD, status workflow and assignment
+  - name: Comments
+    description: Public replies and internal agent notes
+  - name: Metrics
+    description: Aggregated helpdesk metrics (admin only)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness probe
+      description: Returns 200 if the process is up. Does not touch the database.
+      security: []
+      responses:
+        '200':
+          description: The process is running.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Readiness probe
+      description: Returns 200 only if the database answers a `SELECT 1` within 1 second.
+      security: []
+      responses:
+        '200':
+          description: Ready to serve traffic.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+        '503':
+          description: A dependency is down.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+              example:
+                status: unavailable
+                checks:
+                  database: down
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Create a customer account
+      description: New accounts always get the `customer` role. Admins can promote users afterwards.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Account created and logged in.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Exchange credentials for tokens
+      description: |
+        Wrong email and wrong password return the same `INVALID_CREDENTIALS` error, so the endpoint
+        can't be used to discover which emails are registered. Rate limited per IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Logged in.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshTokens
+      summary: Rotate the refresh token and get a new access token
+      description: |
+        The submitted refresh token is revoked and a new pair is returned. If a token that was
+        already rotated is submitted again, the whole session family is revoked (reuse detection).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: New token pair.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke a refresh token
+      description: Idempotent. Returns 204 even if the token was already revoked or unknown.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '204':
+          description: Session ended.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/me:
+    get:
+      tags: [Users]
+      operationId: getCurrentUser
+      summary: Get the authenticated user
+      responses:
+        '200':
+          description: The current user.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users:
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: List users (admin)
+      parameters:
+        - name: role
+          in: query
+          description: Filter by role.
+          schema:
+            $ref: '#/components/schemas/Role'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of users, newest first.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{userId}/role:
+    patch:
+      tags: [Users]
+      operationId: updateUserRole
+      summary: Change a user's role (admin)
+      description: Admins cannot change their own role, so the system can't end up with zero admins by accident.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRoleRequest'
+      responses:
+        '200':
+          description: Role updated.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tickets:
+    post:
+      tags: [Tickets]
+      operationId: createTicket
+      summary: Open a ticket (customer)
+      description: New tickets start as `open`, unassigned, with priority `medium`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTicketRequest'
+      responses:
+        '201':
+          description: Ticket created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Location:
+              description: URL of the new ticket.
+              schema:
+                type: string
+                example: /api/v1/tickets/6c1f0f7e-3b8e-4f0a-9d7e-2b1f1a0c9e11
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [Tickets]
+      operationId: listTickets
+      summary: List tickets
+      description: Customers only see their own tickets; agents and admins see all of them.
+      parameters:
+        - name: status
+          in: query
+          description: Comma-separated statuses, e.g. `open,in_progress`.
+          schema:
+            type: string
+            example: open,in_progress
+        - name: priority
+          in: query
+          description: Comma-separated priorities, e.g. `high,urgent`.
+          schema:
+            type: string
+            example: high,urgent
+        - name: assigneeId
+          in: query
+          description: An agent's UUID, `me` for tickets assigned to the caller, or `none` for the unassigned queue.
+          schema:
+            type: string
+            example: me
+        - name: q
+          in: query
+          description: Case-insensitive search on the title.
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+        - name: sort
+          in: query
+          description: Sort field; prefix with `-` for descending.
+          schema:
+            type: string
+            enum: [createdAt, -createdAt, updatedAt, -updatedAt, priority, -priority]
+            default: -createdAt
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of tickets.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tickets/{ticketId}:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    get:
+      tags: [Tickets]
+      operationId: getTicket
+      summary: Get a ticket
+      description: Returns 404 (not 403) when a customer requests a ticket they don't own.
+      responses:
+        '200':
+          description: The ticket.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [Tickets]
+      operationId: updateTicket
+      summary: Edit ticket fields
+      description: |
+        Customers can edit `title` and `description` of their own tickets while they are `open`.
+        Agents and admins can edit any field, including `priority`. Status and assignee have their own endpoints.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTicketRequest'
+      responses:
+        '200':
+          description: Updated ticket.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Tickets]
+      operationId: deleteTicket
+      summary: Delete a ticket and its comments (admin)
+      responses:
+        '204':
+          description: Deleted.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tickets/{ticketId}/status:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Tickets]
+      operationId: changeTicketStatus
+      summary: Move a ticket through its lifecycle
+      description: |
+        Allowed transitions:
+
+        | From | To | Who |
+        |------|----|-----|
+        | open | in_progress | agent, admin (auto-assigns the caller if unassigned) |
+        | in_progress | open | agent, admin |
+        | in_progress | resolved | agent, admin (sets `resolvedAt`) |
+        | resolved | open | owner customer, agent, admin (clears `resolvedAt`) |
+
+        Anything else returns 409 `INVALID_STATUS_TRANSITION`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeStatusRequest'
+      responses:
+        '200':
+          description: Ticket with its new status.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tickets/{ticketId}/assignee:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    put:
+      tags: [Tickets]
+      operationId: assignTicket
+      summary: Assign or unassign a ticket (agent, admin)
+      description: Send `assigneeId` as a UUID to assign, or `null` to unassign. The assignee must be an agent or admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+      responses:
+        '200':
+          description: Ticket with its new assignee.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tickets/{ticketId}/comments:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    get:
+      tags: [Comments]
+      operationId: listComments
+      summary: List a ticket's comments, oldest first
+      description: Customers don't see internal notes.
+      responses:
+        '200':
+          description: Comments on the ticket.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentList'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Comments]
+      operationId: createComment
+      summary: Reply to a ticket or add an internal note
+      description: 'Only agents and admins can set `isInternal: true`; a customer doing so gets 403.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommentRequest'
+      responses:
+        '201':
+          description: Comment created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /metrics/summary:
+    get:
+      tags: [Metrics]
+      operationId: getMetricsSummary
+      summary: Helpdesk metrics for a date range (admin)
+      description: |
+        Aggregates tickets **created** in `[from, to]` (inclusive, UTC days).
+        Defaults to the last 30 days. Maximum range is 366 days.
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+            example: '2026-10-01'
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+            example: '2026-10-31'
+      responses:
+        '200':
+          description: Metrics for the range.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsSummary'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'Access token from `/auth/login`, sent as `Authorization: Bearer <token>`.'
+
+  headers:
+    X-Request-Id:
+      description: Correlation ID for this request. Echoes the client's value if provided; otherwise generated. Also present in logs and error bodies.
+      schema:
+        type: string
+        example: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+
+  parameters:
+    TicketId:
+      name: ticketId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      description: 1-based page number.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Limit:
+      name: limit
+      in: query
+      description: Items per page.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  schemas:
+    Role:
+      type: string
+      enum: [customer, agent, admin]
+    TicketStatus:
+      type: string
+      enum: [open, in_progress, resolved]
+    TicketPriority:
+      type: string
+      enum: [low, medium, high, urgent]
+
+    User:
+      type: object
+      required: [id, email, name, role, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          example: ana@example.com
+        name:
+          type: string
+          example: Ana Gómez
+        role:
+          $ref: '#/components/schemas/Role'
+        createdAt:
+          type: string
+          format: date-time
+    UserRef:
+      type: object
+      description: Compact user reference embedded in tickets and comments.
+      required: [id, name, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, name]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          example: ana@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          description: Max 72 because bcrypt ignores anything beyond 72 bytes.
+          example: correct-horse-battery
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Ana Gómez
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: ana@example.com
+        password:
+          type: string
+          format: password
+          example: correct-horse-battery
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          minLength: 1
+    TokenPair:
+      type: object
+      required: [accessToken, refreshToken, tokenType, expiresIn]
+      properties:
+        accessToken:
+          type: string
+          description: JWT. Claims include `sub` (user id) and `role`.
+        refreshToken:
+          type: string
+          description: Opaque token, valid for 7 days, single use.
+        tokenType:
+          type: string
+          const: Bearer
+        expiresIn:
+          type: integer
+          description: Access token lifetime in seconds.
+          example: 900
+    AuthResponse:
+      type: object
+      required: [user, tokens]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        tokens:
+          $ref: '#/components/schemas/TokenPair'
+    UpdateRoleRequest:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/Role'
+
+    Ticket:
+      type: object
+      required: [id, title, description, status, priority, customer, assignee, createdAt, updatedAt, resolvedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: Can't log in after password reset
+        description:
+          type: string
+          example: I reset my password but the login page keeps saying invalid credentials.
+        status:
+          $ref: '#/components/schemas/TicketStatus'
+        priority:
+          $ref: '#/components/schemas/TicketPriority'
+        customer:
+          $ref: '#/components/schemas/UserRef'
+        assignee:
+          oneOf:
+            - $ref: '#/components/schemas/UserRef'
+            - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: [string, 'null']
+          format: date-time
+    CreateTicketRequest:
+      type: object
+      additionalProperties: false
+      required: [title, description]
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 120
+          example: Can't log in after password reset
+        description:
+          type: string
+          minLength: 1
+          maxLength: 5000
+          example: I reset my password but the login page keeps saying invalid credentials.
+    UpdateTicketRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 120
+        description:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        priority:
+          $ref: '#/components/schemas/TicketPriority'
+    ChangeStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: '#/components/schemas/TicketStatus'
+    AssignRequest:
+      type: object
+      additionalProperties: false
+      required: [assigneeId]
+      properties:
+        assigneeId:
+          type: [string, 'null']
+          format: uuid
+
+    Comment:
+      type: object
+      required: [id, ticketId, author, body, isInternal, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ticketId:
+          type: string
+          format: uuid
+        author:
+          $ref: '#/components/schemas/UserRef'
+        body:
+          type: string
+        isInternal:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    CreateCommentRequest:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 5000
+          example: Could you try clearing cookies and logging in again?
+        isInternal:
+          type: boolean
+          default: false
+
+    PaginationMeta:
+      type: object
+      required: [page, limit, total, totalPages]
+      properties:
+        page:
+          type: integer
+          example: 2
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 134
+        totalPages:
+          type: integer
+          example: 7
+    TicketPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ticket'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+    UserPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+    CommentList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Comment'
+
+    MetricsSummary:
+      type: object
+      required: [range, totals, byStatus, byPriority, resolutionHours, agents, openedPerDay]
+      properties:
+        range:
+          type: object
+          required: [from, to]
+          properties:
+            from:
+              type: string
+              format: date
+            to:
+              type: string
+              format: date
+        totals:
+          type: object
+          required: [created, resolved, unassigned]
+          properties:
+            created:
+              type: integer
+              example: 134
+            resolved:
+              type: integer
+              example: 97
+            unassigned:
+              type: integer
+              example: 8
+        byStatus:
+          type: object
+          required: [open, in_progress, resolved]
+          properties:
+            open:
+              type: integer
+            in_progress:
+              type: integer
+            resolved:
+              type: integer
+        byPriority:
+          type: object
+          required: [low, medium, high, urgent]
+          properties:
+            low:
+              type: integer
+            medium:
+              type: integer
+            high:
+              type: integer
+            urgent:
+              type: integer
+        resolutionHours:
+          type: object
+          description: Hours from creation to resolution, over resolved tickets. Null when none were resolved.
+          required: [average, median]
+          properties:
+            average:
+              type: [number, 'null']
+              example: 18.4
+            median:
+              type: [number, 'null']
+              example: 11.2
+        agents:
+          type: array
+          items:
+            type: object
+            required: [agent, assigned, inProgress, resolved]
+            properties:
+              agent:
+                $ref: '#/components/schemas/UserRef'
+              assigned:
+                type: integer
+              inProgress:
+                type: integer
+              resolved:
+                type: integer
+        openedPerDay:
+          type: array
+          description: One entry per day in the range, including days with zero tickets.
+          items:
+            type: object
+            required: [date, count]
+            properties:
+              date:
+                type: string
+                format: date
+              count:
+                type: integer
+
+    Health:
+      type: object
+      required: [status, uptimeSeconds, version]
+      properties:
+        status:
+          type: string
+          const: ok
+        uptimeSeconds:
+          type: number
+          example: 3812.4
+        version:
+          type: string
+          example: 0.1.0
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ready, unavailable]
+        checks:
+          type: object
+          required: [database]
+          properties:
+            database:
+              type: string
+              enum: [up, down]
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details, extended with `code` and `requestId`.
+      required: [type, title, status, code, requestId]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Identifies the error type. Stable per `code`.
+        title:
+          type: string
+          description: Short, human-readable summary of the error type.
+        status:
+          type: integer
+          description: HTTP status code, repeated for convenience.
+        detail:
+          type: string
+          description: Explanation specific to this occurrence.
+        instance:
+          type: string
+          description: Request path that produced the error.
+        code:
+          type: string
+          description: Machine-readable error code. Clients should branch on this, not on `detail`.
+          enum:
+            - VALIDATION_ERROR
+            - UNAUTHENTICATED
+            - TOKEN_EXPIRED
+            - INVALID_CREDENTIALS
+            - INVALID_REFRESH_TOKEN
+            - FORBIDDEN
+            - NOT_FOUND
+            - EMAIL_TAKEN
+            - INVALID_STATUS_TRANSITION
+            - INVALID_ASSIGNEE
+            - RATE_LIMITED
+            - INTERNAL_ERROR
+        requestId:
+          type: string
+          description: Same value as the `X-Request-Id` response header.
+    ValidationProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          required: [errors]
+          properties:
+            errors:
+              type: array
+              items:
+                type: object
+                required: [field, message]
+                properties:
+                  field:
+                    type: string
+                    description: Dot path of the invalid field, e.g. `title` or `query.limit`.
+                  message:
+                    type: string
+
+  responses:
+    ValidationError:
+      description: The request body, query or path parameters are invalid.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ValidationProblem'
+          example:
+            type: https://triage-api.dev/errors/validation
+            title: Validation failed
+            status: 400
+            code: VALIDATION_ERROR
+            instance: /api/v1/tickets
+            requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+            errors:
+              - field: title
+                message: must be at least 3 characters
+    Unauthorized:
+      description: Missing, malformed or expired credentials.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            tokenExpired:
+              summary: Access token expired — refresh and retry
+              value:
+                type: https://triage-api.dev/errors/token-expired
+                title: Access token expired
+                status: 401
+                code: TOKEN_EXPIRED
+                requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+            invalidCredentials:
+              summary: Wrong email or password
+              value:
+                type: https://triage-api.dev/errors/invalid-credentials
+                title: Invalid credentials
+                status: 401
+                code: INVALID_CREDENTIALS
+                requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+    Forbidden:
+      description: Authenticated, but the role or ownership rules don't allow this action.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://triage-api.dev/errors/forbidden
+            title: Forbidden
+            status: 403
+            detail: Only agents and admins can assign tickets.
+            code: FORBIDDEN
+            requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+    NotFound:
+      description: The resource doesn't exist, or the caller isn't allowed to know it exists.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://triage-api.dev/errors/not-found
+            title: Not found
+            status: 404
+            detail: Ticket not found.
+            code: NOT_FOUND
+            requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+    Conflict:
+      description: The request conflicts with the current state of the resource.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            invalidTransition:
+              summary: Status transition not allowed
+              value:
+                type: https://triage-api.dev/errors/invalid-status-transition
+                title: Invalid status transition
+                status: 409
+                detail: Cannot change status from 'open' to 'resolved'.
+                code: INVALID_STATUS_TRANSITION
+                requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+            emailTaken:
+              summary: Email already registered
+              value:
+                type: https://triage-api.dev/errors/email-taken
+                title: Email already registered
+                status: 409
+                code: EMAIL_TAKEN
+                requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+    UnprocessableEntity:
+      description: Well-formed request that refers to something invalid (e.g. assigning to a customer).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://triage-api.dev/errors/invalid-assignee
+            title: Invalid assignee
+            status: 422
+            detail: The assignee must be an agent or admin.
+            code: INVALID_ASSIGNEE
+            requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+    TooManyRequests:
+      description: Rate limit exceeded.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+            example: 60
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://triage-api.dev/errors/rate-limited
+            title: Too many requests
+            status: 429
+            code: RATE_LIMITED
+            requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
+    InternalError:
+      description: Unexpected server error. The body never includes stack traces; use `requestId` to find the log entry.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://triage-api.dev/errors/internal
+            title: Internal server error
+            status: 500
+            code: INTERNAL_ERROR
+            requestId: 01JAB7Q9X2M4V8K3T6R0P5N1HZ
