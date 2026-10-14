@@ -1,17 +1,17 @@
 # triage-api — Design
 
 Phase 1 of the project: what the system does, before any code.
-The source of truth for the HTTP contract is [`openapi.yaml`](../openapi.yaml); this document explains the *why* behind it.
+The source of truth for the HTTP contract is [`openapi.yaml`](../openapi.yaml); this document explains the _why_ behind it.
 
 ## 1. Scope
 
 A helpdesk backend with three kinds of users:
 
-| Role       | What they do                                                                 |
-|------------|------------------------------------------------------------------------------|
+| Role       | What they do                                                                   |
+| ---------- | ------------------------------------------------------------------------------ |
 | `customer` | Opens tickets, follows their own tickets, replies to agents, reopens if needed |
 | `agent`    | Works the queue: takes tickets, changes status, replies, leaves internal notes |
-| `admin`    | Everything an agent can do, plus user management and metrics                 |
+| `admin`    | Everything an agent can do, plus user management and metrics                   |
 
 Out of scope for v1: attachments, email notifications, SLAs, multi-tenancy, full-text search engines.
 
@@ -84,30 +84,30 @@ stateDiagram-v2
     resolved --> open : customer or agent reopens
 ```
 
-| From          | To            | Who                     | Side effects                       |
-|---------------|---------------|-------------------------|------------------------------------|
-| `open`        | `in_progress` | agent, admin            | assigns to caller if unassigned    |
-| `in_progress` | `open`        | agent, admin            | —                                  |
-| `in_progress` | `resolved`    | agent, admin            | sets `resolved_at = now()`         |
-| `resolved`    | `open`        | owner customer, agent, admin | clears `resolved_at`          |
+| From          | To            | Who                          | Side effects                    |
+| ------------- | ------------- | ---------------------------- | ------------------------------- |
+| `open`        | `in_progress` | agent, admin                 | assigns to caller if unassigned |
+| `in_progress` | `open`        | agent, admin                 | —                               |
+| `in_progress` | `resolved`    | agent, admin                 | sets `resolved_at = now()`      |
+| `resolved`    | `open`        | owner customer, agent, admin | clears `resolved_at`            |
 
 Any other transition (e.g. `open → resolved`) returns **409 `INVALID_STATUS_TRANSITION`**. Changing status to the current status is also a 409, so clients can't hide bugs behind no-op writes.
 
 ## 4. Permissions
 
-| Action                               | customer                    | agent | admin |
-|--------------------------------------|-----------------------------|:-----:|:-----:|
-| Create ticket                        | ✅                           | —     | —     |
-| List / read tickets                  | own only                    | all   | all   |
-| Edit title / description / priority  | own, only while `open` (no priority) | ✅ | ✅ |
-| Change status                        | reopen own resolved ticket  | ✅    | ✅    |
-| Assign / unassign                    | —                           | ✅    | ✅    |
-| Read comments                        | public ones on own tickets  | all   | all   |
-| Write public comment                 | own tickets                 | ✅    | ✅    |
-| Write internal note                  | —                           | ✅    | ✅    |
-| Delete ticket                        | —                           | —     | ✅    |
-| List users / change roles            | —                           | —     | ✅    |
-| Metrics                              | —                           | —     | ✅    |
+| Action                              | customer                             | agent | admin |
+| ----------------------------------- | ------------------------------------ | :---: | :---: |
+| Create ticket                       | ✅                                   |   —   |   —   |
+| List / read tickets                 | own only                             |  all  |  all  |
+| Edit title / description / priority | own, only while `open` (no priority) |  ✅   |  ✅   |
+| Change status                       | reopen own resolved ticket           |  ✅   |  ✅   |
+| Assign / unassign                   | —                                    |  ✅   |  ✅   |
+| Read comments                       | public ones on own tickets           |  all  |  all  |
+| Write public comment                | own tickets                          |  ✅   |  ✅   |
+| Write internal note                 | —                                    |  ✅   |  ✅   |
+| Delete ticket                       | —                                    |   —   |  ✅   |
+| List users / change roles           | —                                    |   —   |  ✅   |
+| Metrics                             | —                                    |   —   |  ✅   |
 
 Two rules worth calling out:
 
@@ -120,27 +120,27 @@ Customers can't set priority; they get `medium` by default and agents triage it.
 
 Base path: `/api/v1`. All bodies are JSON. Field names are `camelCase` in the API and `snake_case` in the database.
 
-| Method | Path                          | Auth           | Success |
-|--------|-------------------------------|----------------|---------|
-| GET    | `/health`                     | public         | 200     |
-| GET    | `/health/ready`               | public         | 200 / 503 |
-| POST   | `/auth/register`              | public         | 201     |
-| POST   | `/auth/login`                 | public         | 200     |
-| POST   | `/auth/refresh`               | public (refresh token in body) | 200 |
-| POST   | `/auth/logout`                | public (refresh token in body) | 204 |
-| GET    | `/users/me`                   | any role       | 200     |
-| GET    | `/users`                      | admin          | 200     |
-| PATCH  | `/users/{userId}/role`        | admin          | 200     |
-| POST   | `/tickets`                    | customer       | 201 + `Location` |
-| GET    | `/tickets`                    | any role       | 200     |
-| GET    | `/tickets/{ticketId}`         | any role*      | 200     |
-| PATCH  | `/tickets/{ticketId}`         | any role*      | 200     |
-| DELETE | `/tickets/{ticketId}`         | admin          | 204     |
-| POST   | `/tickets/{ticketId}/status`  | any role*      | 200     |
-| PUT    | `/tickets/{ticketId}/assignee`| agent, admin   | 200     |
-| GET    | `/tickets/{ticketId}/comments`| any role*      | 200     |
-| POST   | `/tickets/{ticketId}/comments`| any role*      | 201     |
-| GET    | `/metrics/summary`            | admin          | 200     |
+| Method | Path                           | Auth                           | Success          |
+| ------ | ------------------------------ | ------------------------------ | ---------------- |
+| GET    | `/health`                      | public                         | 200              |
+| GET    | `/health/ready`                | public                         | 200 / 503        |
+| POST   | `/auth/register`               | public                         | 201              |
+| POST   | `/auth/login`                  | public                         | 200              |
+| POST   | `/auth/refresh`                | public (refresh token in body) | 200              |
+| POST   | `/auth/logout`                 | public (refresh token in body) | 204              |
+| GET    | `/users/me`                    | any role                       | 200              |
+| GET    | `/users`                       | admin                          | 200              |
+| PATCH  | `/users/{userId}/role`         | admin                          | 200              |
+| POST   | `/tickets`                     | customer                       | 201 + `Location` |
+| GET    | `/tickets`                     | any role                       | 200              |
+| GET    | `/tickets/{ticketId}`          | any role*                      | 200              |
+| PATCH  | `/tickets/{ticketId}`          | any role*                      | 200              |
+| DELETE | `/tickets/{ticketId}`          | admin                          | 204              |
+| POST   | `/tickets/{ticketId}/status`   | any role*                      | 200              |
+| PUT    | `/tickets/{ticketId}/assignee` | agent, admin                   | 200              |
+| GET    | `/tickets/{ticketId}/comments` | any role*                      | 200              |
+| POST   | `/tickets/{ticketId}/comments` | any role*                      | 201              |
+| GET    | `/metrics/summary`             | admin                          | 200              |
 
 \* subject to the ownership rules in §4.
 
@@ -160,7 +160,7 @@ Response envelope:
 
 ```json
 {
-  "data": [ { "...": "..." } ],
+  "data": [{ "...": "..." }],
   "meta": { "page": 2, "limit": 20, "total": 134, "totalPages": 7 }
 }
 ```
@@ -210,20 +210,20 @@ Validation errors add an `errors` array, one item per field:
 }
 ```
 
-| Status | `code`                       | When                                            |
-|--------|------------------------------|-------------------------------------------------|
-| 400    | `VALIDATION_ERROR`           | body, query or path params fail validation      |
-| 401    | `UNAUTHENTICATED`            | missing or malformed `Authorization` header     |
-| 401    | `TOKEN_EXPIRED`              | access token expired → client should refresh    |
-| 401    | `INVALID_CREDENTIALS`        | wrong email or password (same message for both) |
-| 401    | `INVALID_REFRESH_TOKEN`      | refresh token unknown, expired, revoked or reused |
-| 403    | `FORBIDDEN`                  | authenticated but role/ownership doesn't allow it |
-| 404    | `NOT_FOUND`                  | resource doesn't exist *or you can't see it*    |
-| 409    | `EMAIL_TAKEN`                | register with an existing email                 |
-| 409    | `INVALID_STATUS_TRANSITION`  | see §3                                          |
-| 422    | `INVALID_ASSIGNEE`           | assignee is not an agent/admin                  |
-| 429    | `RATE_LIMITED`               | too many login attempts                         |
-| 500    | `INTERNAL_ERROR`             | anything unexpected — no stack trace in the body |
+| Status | `code`                      | When                                              |
+| ------ | --------------------------- | ------------------------------------------------- |
+| 400    | `VALIDATION_ERROR`          | body, query or path params fail validation        |
+| 401    | `UNAUTHENTICATED`           | missing or malformed `Authorization` header       |
+| 401    | `TOKEN_EXPIRED`             | access token expired → client should refresh      |
+| 401    | `INVALID_CREDENTIALS`       | wrong email or password (same message for both)   |
+| 401    | `INVALID_REFRESH_TOKEN`     | refresh token unknown, expired, revoked or reused |
+| 403    | `FORBIDDEN`                 | authenticated but role/ownership doesn't allow it |
+| 404    | `NOT_FOUND`                 | resource doesn't exist _or you can't see it_      |
+| 409    | `EMAIL_TAKEN`               | register with an existing email                   |
+| 409    | `INVALID_STATUS_TRANSITION` | see §3                                            |
+| 422    | `INVALID_ASSIGNEE`          | assignee is not an agent/admin                    |
+| 429    | `RATE_LIMITED`              | too many login attempts                           |
+| 500    | `INTERNAL_ERROR`            | anything unexpected — no stack trace in the body  |
 
 ### Built for debugging
 

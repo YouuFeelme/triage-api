@@ -1,0 +1,47 @@
+{
+  "name": "triage-api",
+  "version": "0.1.0",
+  "description": "Helpdesk ticketing API — TypeScript, Express, PostgreSQL, JWT, OpenAPI",
+  "private": true,
+  "license": "MIT",
+  "author": "Samuel Echavarría",
+  "type": "commonjs",
+  "main": "dist/server.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts | pino-pretty",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "lint:api": "redocly lint openapi.yaml",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run lint:api"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "helmet": "^8.3.0",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@redocly/cli": "^2.63.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.19.2",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "pino-pretty": "^13.2.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0",
+    "typescript-eslint": "^8.71.2"
+  }
+}

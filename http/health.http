@@ -1,0 +1,22 @@
+# Requests for the REST Client extension: click "Send Request" above each one.
+@baseUrl = http://localhost:3000/api/v1
+
+### Liveness: 200 with status, uptime and version
+GET {{baseUrl}}/health
+
+### Your own request ID comes back in the X-Request-Id response header
+GET {{baseUrl}}/health
+X-Request-Id: debug-samuel-001
+
+### An unsafe request ID is ignored and replaced with a UUID
+GET {{baseUrl}}/health
+X-Request-Id: <script>alert(1)</script>
+
+### Unknown route: 404 as application/problem+json
+GET {{baseUrl}}/tickets-that-do-not-exist
+
+### Malformed JSON: 400 VALIDATION_ERROR, before any route runs
+POST {{baseUrl}}/health
+Content-Type: application/json
+
+{ "title": "missing closing brace"
