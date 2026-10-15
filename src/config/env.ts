@@ -11,6 +11,10 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  DATABASE_URL: z
+    .string()
+    .regex(/^postgres(ql)?:\/\//, 'must be a connection string like postgres://user:pass@host/db'),
+  DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
 });
 
 const parsed = envSchema.safeParse(process.env);

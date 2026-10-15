@@ -4,6 +4,9 @@
 ### Liveness: 200 with status, uptime and version
 GET {{baseUrl}}/health
 
+### Readiness: 200 if PostgreSQL answers, 503 if not (try it after `npm run db:down`)
+GET {{baseUrl}}/health/ready
+
 ### Your own request ID comes back in the X-Request-Id response header
 GET {{baseUrl}}/health
 X-Request-Id: debug-samuel-001

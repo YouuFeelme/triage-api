@@ -7,3 +7,9 @@ import { healthService } from '../services/health.service';
 export const getHealth: RequestHandler = (_req, res) => {
   res.status(200).json(healthService.getStatus());
 };
+
+export const getReadiness: RequestHandler = async (_req, res) => {
+  const readiness = await healthService.getReadiness();
+  // 503 tells a load balancer to stop sending traffic here until the database is back.
+  res.status(readiness.status === 'ready' ? 200 : 503).json(readiness);
+};

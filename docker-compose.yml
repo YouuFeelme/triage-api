@@ -1,0 +1,24 @@
+# Local infrastructure. `npm run db:up` starts it, `npm run db:down` stops it (data is kept).
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: triage-db
+    environment:
+      POSTGRES_USER: triage
+      POSTGRES_PASSWORD: triage
+      POSTGRES_DB: triage
+    ports:
+      - '5432:5432'
+    volumes:
+      # Named volume: the data survives `docker compose down` and container restarts.
+      - pgdata:/var/lib/postgresql/data
+      # Scripts here run once, the first time the volume is created.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U triage -d triage']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

@@ -15,7 +15,8 @@ export const requestLogger = pinoHttp({
     return 'info';
   },
   // Health probes run every few seconds in production; logging them is just noise.
+  // A failed readiness check is still logged, by the health service.
   autoLogging: {
-    ignore: (req) => req.url === '/api/v1/health',
+    ignore: (req) => req.url?.startsWith('/api/v1/health') ?? false,
   },
 });
