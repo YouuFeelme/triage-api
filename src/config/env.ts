@@ -2,8 +2,9 @@ import { existsSync } from 'node:fs';
 import { z } from 'zod';
 
 // Locally, variables come from .env. In Docker/AWS they come from the real environment,
-// so a missing file is normal and not an error.
-if (existsSync('.env')) {
+// so a missing file is normal and not an error. Tests never read .env: they set their own
+// variables (tests/setup/test-env.ts), so they can't touch your development database by accident.
+if (process.env.NODE_ENV !== 'test' && existsSync('.env')) {
   process.loadEnvFile('.env');
 }
 
@@ -27,6 +28,8 @@ const envSchema = z
       .min(32, 'must be at least 32 characters. Generate one with: openssl rand -base64 48'),
     ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
     REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+    // bcrypt work factor. 12 in real life; tests use 4 so hundreds of hashes take milliseconds.
+    BCRYPT_COST: z.coerce.number().int().min(4).max(15).default(12),
   })
   .refine((e) => !(e.NODE_ENV === 'production' && e.JWT_SECRET.startsWith('replace-me')), {
     message: 'still has the placeholder value from .env.example',

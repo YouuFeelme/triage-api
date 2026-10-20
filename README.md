@@ -3,7 +3,7 @@
 Backend for a support helpdesk: customers open tickets, agents work them, admins see metrics.
 Built with debugging in mind — every request has a traceable ID and every error has a stable, documented shape.
 
-**Stack:** TypeScript · Node.js · Express · PostgreSQL · JWT · OpenAPI · Jest · Docker · GitHub Actions · AWS
+**Stack:** TypeScript · Node.js · Express · PostgreSQL · Kysely · JWT · OpenAPI · Vitest · Docker · GitHub Actions · AWS
 
 ## Status
 
@@ -14,7 +14,7 @@ Built with debugging in mind — every request has a traceable ID and every erro
 | 3     | PostgreSQL in Docker + migrations                              | ✅    |
 | 4     | Auth: register, login, JWT + refresh rotation, roles           | ✅    |
 | 5     | Tickets, status workflow, filters, pagination, metrics         | ✅    |
-| 6     | Unit + integration tests (≥ 80% coverage)                      | ⏳    |
+| 6     | Unit + integration tests (≥ 80% coverage)                      | ✅    |
 | 7     | Multi-stage Dockerfile, docker-compose, CI on every PR         | ⏳    |
 | 8     | Deploy to AWS, public Swagger UI                               | ⏳    |
 
@@ -91,25 +91,41 @@ Try the whole flow with [`http/auth.http`](http/auth.http).
 
 Try the whole flow with [`http/tickets.http`](http/tickets.http).
 
+## Testing
+
+```bash
+npm run db:up          # the tests use the triage_test database in the same container
+npm test               # unit + integration tests
+npm run test:coverage  # same, with a coverage report (fails under 80%)
+```
+
+- **Unit tests** (`tests/unit/`) cover pure logic: tokens, validation, error formatting, date ranges.
+- **Integration tests** (`tests/integration/`) call the real Express app through [Supertest](https://github.com/ladjs/supertest) and hit a real PostgreSQL database, so SQL, constraints and transactions are tested too. Every test starts from empty tables.
+- **Isolation from your data:** tests never read `.env`; they always point at `triage_test`, and the reset helper refuses to truncate any database whose name doesn't end in `_test`.
+- **Why Vitest instead of Jest:** `jose` 6 and Kysely 0.29 ship only as ES modules. Jest's CommonJS module loader can't load them without transpiling `node_modules`, and `jose` fails inside Jest's sandbox. Vitest runs them natively with the same `describe`/`it`/`expect` API.
+
 ## Scripts
 
-| Command               | What it does                                             |
-| --------------------- | -------------------------------------------------------- |
-| `npm run dev`         | Starts the API with hot reload and readable logs         |
-| `npm run build`       | Compiles TypeScript to `dist/`                           |
-| `npm start`           | Runs the compiled build                                  |
-| `npm run db:up`       | Starts PostgreSQL in Docker and waits until it's healthy |
-| `npm run db:down`     | Stops PostgreSQL (data is kept in a Docker volume)       |
-| `npm run db:migrate`  | Applies pending migrations                               |
-| `npm run db:rollback` | Undoes the last migration                                |
-| `npm run db:seed`     | Replaces all data with sample data (never in production) |
-| `npm run db:reset`    | Rolls everything back, migrates and seeds again          |
-| `npm run db:psql`     | Opens a `psql` shell inside the database container       |
-| `npm run typecheck`   | Type-checks without emitting files                       |
-| `npm run lint`        | ESLint with type-aware rules                             |
-| `npm run format`      | Formats everything with Prettier                         |
-| `npm run lint:api`    | Validates `openapi.yaml` with Redocly                    |
-| `npm run check`       | All of the above checks, the same ones CI will run       |
+| Command                 | What it does                                             |
+| ----------------------- | -------------------------------------------------------- |
+| `npm run dev`           | Starts the API with hot reload and readable logs         |
+| `npm run build`         | Compiles TypeScript to `dist/`                           |
+| `npm start`             | Runs the compiled build                                  |
+| `npm run db:up`         | Starts PostgreSQL in Docker and waits until it's healthy |
+| `npm run db:down`       | Stops PostgreSQL (data is kept in a Docker volume)       |
+| `npm run db:migrate`    | Applies pending migrations                               |
+| `npm run db:rollback`   | Undoes the last migration                                |
+| `npm run db:seed`       | Replaces all data with sample data (never in production) |
+| `npm run db:reset`      | Rolls everything back, migrates and seeds again          |
+| `npm run db:psql`       | Opens a `psql` shell inside the database container       |
+| `npm run typecheck`     | Type-checks without emitting files                       |
+| `npm run lint`          | ESLint with type-aware rules                             |
+| `npm run format`        | Formats everything with Prettier                         |
+| `npm run lint:api`      | Validates `openapi.yaml` with Redocly                    |
+| `npm test`              | Runs unit and integration tests                          |
+| `npm run test:watch`    | Re-runs tests on every file change                       |
+| `npm run test:coverage` | Tests + coverage report (minimum 80%)                    |
+| `npm run check`         | All of the above checks, the same ones CI will run       |
 
 ## Project structure
 
@@ -127,6 +143,11 @@ src/
 ├── controllers/        # HTTP in/out: read the request, call a service, send the response
 ├── services/           # Business rules (status transitions, permissions...)
 └── repositories/       # Data access: the only layer that talks to PostgreSQL
+tests/
+├── setup/              # Test environment, test DB migration, per-file hooks
+├── helpers/            # Supertest client, user/ticket factories, DB reset
+├── unit/               # Pure logic, no database
+└── integration/        # Real HTTP requests against a real database
 ```
 
 A request flows `route → controller → service → repository`, and each layer only calls the one below it.

@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// package.json sits two levels up from both src/config/ (dev) and dist/config/ (build).
-const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
+// Every way of running the app (npm scripts, the test runner, `node dist/server.js` in Docker)
+// starts from the project root, where package.json lives.
+const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as {
   name: string;
   version: string;
 };
