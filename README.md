@@ -13,7 +13,7 @@ Built with debugging in mind — every request has a traceable ID and every erro
 | 2     | Project skeleton (strict TS, Express, ESLint/Prettier, layers) | ✅    |
 | 3     | PostgreSQL in Docker + migrations                              | ✅    |
 | 4     | Auth: register, login, JWT + refresh rotation, roles           | ✅    |
-| 5     | Tickets, status workflow, filters, pagination, metrics         | ⏳    |
+| 5     | Tickets, status workflow, filters, pagination, metrics         | ✅    |
 | 6     | Unit + integration tests (≥ 80% coverage)                      | ⏳    |
 | 7     | Multi-stage Dockerfile, docker-compose, CI on every PR         | ⏳    |
 | 8     | Deploy to AWS, public Swagger UI                               | ⏳    |
@@ -74,6 +74,22 @@ Seed users all share the password `Password123!`:
 - **Roles** are checked per route with `requireRole('admin')`. Because access tokens are stateless, a role change applies when the user's next access token is issued (at most 15 minutes).
 
 Try the whole flow with [`http/auth.http`](http/auth.http).
+
+## Tickets
+
+| Rule                      | Where it lives                                                             |
+| ------------------------- | -------------------------------------------------------------------------- |
+| Who can call an endpoint  | Route: `requireRole('admin')`, `requireRole('agent', 'admin')`             |
+| Which tickets you can see | Service: customers only see their own; anyone else's is a `404`            |
+| Status changes            | Service: a transition table (`open → in_progress → resolved → open`)       |
+| Data integrity            | Database: enums, `CHECK (status = 'resolved') = (resolved_at IS NOT NULL)` |
+
+- **Status changes** run in a transaction with `SELECT ... FOR UPDATE`, so two agents moving the same ticket are applied one after the other. Invalid transitions return `409`; starting work on an unassigned ticket assigns it to the caller.
+- **Lists** support `status` and `priority` (comma-separated), `assigneeId` (`me`, `none` or a UUID), `q` (title search, `%` and `_` escaped), `sort` and `page`/`limit`. One extra query loads all customer and assignee names for the page, never one per ticket.
+- **Comments:** customers see and write public replies on their own tickets; agents and admins also see and write internal notes.
+- **Metrics** (`GET /metrics/summary`, admin) are hand-written SQL in [`metrics.repository.ts`](src/repositories/metrics.repository.ts): `COUNT(*) FILTER`, `PERCENTILE_CONT` for the median resolution time, a `LEFT JOIN` that keeps agents with no tickets, and `GENERATE_SERIES` so days without tickets still appear. Days are UTC calendar days regardless of the database session's time zone.
+
+Try the whole flow with [`http/tickets.http`](http/tickets.http).
 
 ## Scripts
 

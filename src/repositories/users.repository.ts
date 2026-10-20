@@ -5,6 +5,8 @@ import type { Database, NewUser, User, UserRole } from '../db/schema';
 /** The user fields the API may return. password_hash never leaves this layer by accident. */
 const PUBLIC_COLUMNS = ['id', 'email', 'name', 'role', 'createdAt'] as const;
 export type PublicUser = Pick<User, (typeof PUBLIC_COLUMNS)[number]>;
+/** Compact reference embedded in tickets and comments. Mirrors UserRef in openapi.yaml. */
+export type UserRef = Pick<User, 'id' | 'name' | 'role'>;
 
 export const usersRepository = {
   /** Includes the password hash: only for checking credentials. */
@@ -57,6 +59,21 @@ export const usersRepository = {
     ]);
 
     return { rows, total: totalRow.total };
+  },
+
+  /**
+   * Loads several users in ONE query (WHERE id IN (...)), keyed by id.
+   * Used to attach customer/assignee names to a page of tickets without an N+1 query per row.
+   */
+  async findRefsByIds(ids: readonly string[]): Promise<Map<string, UserRef>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Map();
+    const rows = await db
+      .selectFrom('users')
+      .select(['id', 'name', 'role'])
+      .where('id', 'in', unique)
+      .execute();
+    return new Map(rows.map((row) => [row.id, row]));
   },
 
   updateRole(id: string, role: UserRole): Promise<PublicUser | undefined> {

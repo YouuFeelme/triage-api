@@ -1,0 +1,168 @@
+# Tickets, comments and metrics. Run in order: later requests reuse tokens and ids from earlier ones.
+# Seed users all have the password Password123!
+@baseUrl = http://localhost:3000/api/v1
+
+### 1. Log in: Ana (customer)
+# @name ana
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "ana@example.com", "password": "Password123!" }
+
+### 2. Log in: Lucía (agent)
+# @name lucia
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "lucia@triage.dev", "password": "Password123!" }
+
+### 3. Log in: Carlos (another customer)
+# @name carlos
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "carlos@example.com", "password": "Password123!" }
+
+### 4. Log in: admin
+# @name admin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "admin@triage.dev", "password": "Password123!" }
+
+### 5. Ana opens a ticket: 201 + Location header, status open, priority medium, no assignee
+# @name created
+POST {{baseUrl}}/tickets
+Authorization: Bearer {{ana.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "title": "Export button does nothing", "description": "Clicking Export on the reports page has no effect." }
+
+### 6. Ana lists tickets: only HER tickets come back
+GET {{baseUrl}}/tickets
+Authorization: Bearer {{ana.response.body.$.tokens.accessToken}}
+
+### 7. Ana tries to set the priority: 403 (agents triage)
+PATCH {{baseUrl}}/tickets/{{created.response.body.$.id}}
+Authorization: Bearer {{ana.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "priority": "urgent" }
+
+### 8. Carlos asks for Ana's ticket: 404, not 403 (he must not learn it exists)
+GET {{baseUrl}}/tickets/{{created.response.body.$.id}}
+Authorization: Bearer {{carlos.response.body.$.tokens.accessToken}}
+
+### 9. Lucía's queue: open + unassigned, most urgent first
+GET {{baseUrl}}/tickets?status=open&assigneeId=none&sort=-priority
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+
+### 10. Lucía searches by title, 5 per page
+GET {{baseUrl}}/tickets?q=export&page=1&limit=5
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+
+### 11. Lucía triages: priority high
+PATCH {{baseUrl}}/tickets/{{created.response.body.$.id}}
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "priority": "high" }
+
+### 12. Skipping a step: open -> resolved is not allowed: 409 INVALID_STATUS_TRANSITION
+POST {{baseUrl}}/tickets/{{created.response.body.$.id}}/status
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "status": "resolved" }
+
+### 13. Lucía starts work: in_progress, and she becomes the assignee automatically
+POST {{baseUrl}}/tickets/{{created.response.body.$.id}}/status
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "status": "in_progress" }
+
+### 14. Lucía leaves an internal note (customers never see it)
+POST {{baseUrl}}/tickets/{{created.response.body.$.id}}/comments
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "body": "Reproduced: the export endpoint returns 500 for this account.", "isInternal": true }
+
+### 15. Lucía replies to Ana
+POST {{baseUrl}}/tickets/{{created.response.body.$.id}}/comments
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "body": "Thanks Ana, we found the cause and are working on a fix." }
+
+### 16. Ana reads the conversation: only the public reply
+GET {{baseUrl}}/tickets/{{created.response.body.$.id}}/comments
+Authorization: Bearer {{ana.response.body.$.tokens.accessToken}}
+
+### 17. Lucía reads it: the reply AND the internal note
+GET {{baseUrl}}/tickets/{{created.response.body.$.id}}/comments
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+
+### 18. Ana tries to write an internal note: 403
+POST {{baseUrl}}/tickets/{{created.response.body.$.id}}/comments
+Authorization: Bearer {{ana.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "body": "Secret note", "isInternal": true }
+
+### 19. Lucía resolves it: resolvedAt is set
+POST {{baseUrl}}/tickets/{{created.response.body.$.id}}/status
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "status": "resolved" }
+
+### 20. Ana reopens it: back to open, resolvedAt cleared
+POST {{baseUrl}}/tickets/{{created.response.body.$.id}}/status
+Authorization: Bearer {{ana.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "status": "open" }
+
+### 21. Assigning a ticket to a customer: 422 INVALID_ASSIGNEE
+PUT {{baseUrl}}/tickets/{{created.response.body.$.id}}/assignee
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "assigneeId": "{{carlos.response.body.$.user.id}}" }
+
+### 22. Unassign: back to the queue
+PUT {{baseUrl}}/tickets/{{created.response.body.$.id}}/assignee
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "assigneeId": null }
+
+### 23. Invalid filters: 400 with one error per query parameter
+GET {{baseUrl}}/tickets?status=closed&limit=500&sort=newest
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+
+### 24. Admin: metrics for the last 30 days (default range)
+GET {{baseUrl}}/metrics/summary
+Authorization: Bearer {{admin.response.body.$.tokens.accessToken}}
+
+### 25. Admin: metrics for a custom range
+GET {{baseUrl}}/metrics/summary?from=2026-10-01&to=2026-10-31
+Authorization: Bearer {{admin.response.body.$.tokens.accessToken}}
+
+### 26. Metrics with `from` after `to`: 400
+GET {{baseUrl}}/metrics/summary?from=2026-10-31&to=2026-10-01
+Authorization: Bearer {{admin.response.body.$.tokens.accessToken}}
+
+### 27. An agent asks for metrics: 403
+GET {{baseUrl}}/metrics/summary
+Authorization: Bearer {{lucia.response.body.$.tokens.accessToken}}
+
+### 28. Admin deletes the ticket (its comments go with it): 204
+DELETE {{baseUrl}}/tickets/{{created.response.body.$.id}}
+Authorization: Bearer {{admin.response.body.$.tokens.accessToken}}
+
+### 29. It's gone: 404
+GET {{baseUrl}}/tickets/{{created.response.body.$.id}}
+Authorization: Bearer {{admin.response.body.$.tokens.accessToken}}
