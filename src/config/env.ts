@@ -7,15 +7,31 @@ if (existsSync('.env')) {
   process.loadEnvFile('.env');
 }
 
-const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
-  DATABASE_URL: z
-    .string()
-    .regex(/^postgres(ql)?:\/\//, 'must be a connection string like postgres://user:pass@host/db'),
-  DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
-});
+const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+    LOG_LEVEL: z
+      .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+      .default('info'),
+    DATABASE_URL: z
+      .string()
+      .regex(
+        /^postgres(ql)?:\/\//,
+        'must be a connection string like postgres://user:pass@host/db',
+      ),
+    DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+    // Signs access tokens. Anyone who knows it can forge a token for any user, admins included.
+    JWT_SECRET: z
+      .string()
+      .min(32, 'must be at least 32 characters. Generate one with: openssl rand -base64 48'),
+    ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
+    REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+  })
+  .refine((e) => !(e.NODE_ENV === 'production' && e.JWT_SECRET.startsWith('replace-me')), {
+    message: 'still has the placeholder value from .env.example',
+    path: ['JWT_SECRET'],
+  });
 
 const parsed = envSchema.safeParse(process.env);
 

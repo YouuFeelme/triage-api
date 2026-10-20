@@ -1,0 +1,103 @@
+# Auth and users. Run the requests in order: later ones reuse tokens from earlier responses.
+# Seed users all have the password Password123!
+@baseUrl = http://localhost:3000/api/v1
+
+### 1. Log in as a customer
+# @name customerLogin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "ana@example.com", "password": "Password123!" }
+
+### 2. Who am I? (uses the access token from request 1)
+GET {{baseUrl}}/users/me
+Authorization: Bearer {{customerLogin.response.body.$.tokens.accessToken}}
+
+### 3. A customer can't list users: 403 FORBIDDEN
+GET {{baseUrl}}/users
+Authorization: Bearer {{customerLogin.response.body.$.tokens.accessToken}}
+
+### 4. Rotate the refresh token: returns a new pair
+# @name refreshed
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{customerLogin.response.body.$.tokens.refreshToken}}" }
+
+### 5. Reuse the OLD refresh token: 401, and the whole session is revoked (see the server log)
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{customerLogin.response.body.$.tokens.refreshToken}}" }
+
+### 6. Even the new token from request 4 stopped working: 401
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{refreshed.response.body.$.refreshToken}}" }
+
+### 7. Log in as admin
+# @name adminLogin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "admin@triage.dev", "password": "Password123!" }
+
+### 8. Admin: list agents, page 1
+GET {{baseUrl}}/users?role=agent&page=1&limit=10
+Authorization: Bearer {{adminLogin.response.body.$.tokens.accessToken}}
+
+### 9. Admin: invalid query: 400 with one error per field
+GET {{baseUrl}}/users?role=superuser&limit=500
+Authorization: Bearer {{adminLogin.response.body.$.tokens.accessToken}}
+
+### 10. Admin: promote Ana to agent (her current token keeps the old role until it expires)
+PATCH {{baseUrl}}/users/{{customerLogin.response.body.$.user.id}}/role
+Authorization: Bearer {{adminLogin.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "role": "agent" }
+
+### 11. Admin can't change their own role: 403
+PATCH {{baseUrl}}/users/{{adminLogin.response.body.$.user.id}}/role
+Authorization: Bearer {{adminLogin.response.body.$.tokens.accessToken}}
+Content-Type: application/json
+
+{ "role": "customer" }
+
+### 12. Register: 201 with user + tokens
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{ "email": "  New.User@Example.com ", "password": "correct-horse-battery", "name": "New User" }
+
+### 13. Register the same email again: 409 EMAIL_TAKEN
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{ "email": "new.user@example.com", "password": "correct-horse-battery", "name": "Someone Else" }
+
+### 14. Register with invalid data: 400 listing every problem
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{ "email": "not-an-email", "password": "short", "name": "", "isAdmin": true }
+
+### 15. Wrong password: 401 INVALID_CREDENTIALS (same message as an unknown email)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "ana@example.com", "password": "wrong-password" }
+
+### 16. No token: 401 UNAUTHENTICATED
+GET {{baseUrl}}/users/me
+
+### 17. Garbage token: 401 UNAUTHENTICATED
+GET {{baseUrl}}/users/me
+Authorization: Bearer not.a.real.token
+
+### 18. Log out admin: 204, and the refresh token stops working
+POST {{baseUrl}}/auth/logout
+Content-Type: application/json
+
+{ "refreshToken": "{{adminLogin.response.body.$.tokens.refreshToken}}" }

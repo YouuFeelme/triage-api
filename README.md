@@ -12,7 +12,7 @@ Built with debugging in mind — every request has a traceable ID and every erro
 | 1     | Design and OpenAPI contract                                    | ✅    |
 | 2     | Project skeleton (strict TS, Express, ESLint/Prettier, layers) | ✅    |
 | 3     | PostgreSQL in Docker + migrations                              | ✅    |
-| 4     | Auth: register, login, JWT + refresh rotation, roles           | ⏳    |
+| 4     | Auth: register, login, JWT + refresh rotation, roles           | ✅    |
 | 5     | Tickets, status workflow, filters, pagination, metrics         | ⏳    |
 | 6     | Unit + integration tests (≥ 80% coverage)                      | ⏳    |
 | 7     | Multi-stage Dockerfile, docker-compose, CI on every PR         | ⏳    |
@@ -60,6 +60,21 @@ Seed users all share the password `Password123!`:
 | `carlos@example.com` | customer |
 | `sofia@example.com`  | customer |
 
+## Authentication
+
+| Token   | What it is                            | Lifetime | Stored server-side             |
+| ------- | ------------------------------------- | -------- | ------------------------------ |
+| Access  | JWT (HS256) with the user id and role | 15 min   | No, it's verified by signature |
+| Refresh | 256 random bits, opaque to the client | 7 days   | Only its SHA-256 hash          |
+
+- Send the access token as `Authorization: Bearer <token>`. An expired one returns `401 TOKEN_EXPIRED` (refresh and retry); anything else wrong returns `401 UNAUTHENTICATED` (log in again).
+- **Rotation:** every `POST /auth/refresh` revokes the token it receives and returns a new pair. Concurrent refreshes are serialized with `SELECT ... FOR UPDATE`.
+- **Reuse detection:** all tokens from one login share a `family_id`. If an already-used token comes back, someone has a copy, so the whole family is revoked and a warning is logged.
+- **Login hardening:** unknown email and wrong password return the same `401 INVALID_CREDENTIALS` and take the same time (a dummy bcrypt comparison runs for unknown emails). After 10 failed attempts in 15 minutes, an IP gets `429` with `Retry-After`.
+- **Roles** are checked per route with `requireRole('admin')`. Because access tokens are stateless, a role change applies when the user's next access token is issued (at most 15 minutes).
+
+Try the whole flow with [`http/auth.http`](http/auth.http).
+
 ## Scripts
 
 | Command               | What it does                                             |
@@ -88,10 +103,11 @@ src/
 ├── server.ts           # Starts the HTTP server, graceful shutdown
 ├── config/             # Validated environment variables, app info
 ├── db/                 # Kysely connection, schema types, migrations, seed
-├── lib/                # Shared infrastructure (logger, password hashing, timeouts)
+├── lib/                # Shared infrastructure (logger, passwords, tokens, validation)
 ├── errors/             # AppError + RFC 9457 Problem Details
-├── middlewares/        # Request ID, request logging, 404, error handler
+├── middlewares/        # Request ID, logging, auth + roles, rate limit, 404, error handler
 ├── routes/             # URL → controller mapping, one file per resource
+├── schemas/            # Zod schemas for request bodies, queries and params
 ├── controllers/        # HTTP in/out: read the request, call a service, send the response
 ├── services/           # Business rules (status transitions, permissions...)
 └── repositories/       # Data access: the only layer that talks to PostgreSQL
