@@ -1,5 +1,7 @@
 # triage-api
 
+[![CI](https://github.com/YouuFeelme/triage-api/actions/workflows/ci.yml/badge.svg)](https://github.com/YouuFeelme/triage-api/actions/workflows/ci.yml)
+
 Backend for a support helpdesk: customers open tickets, agents work them, admins see metrics.
 Built with debugging in mind — every request has a traceable ID and every error has a stable, documented shape.
 
@@ -15,7 +17,7 @@ Built with debugging in mind — every request has a traceable ID and every erro
 | 4     | Auth: register, login, JWT + refresh rotation, roles           | ✅    |
 | 5     | Tickets, status workflow, filters, pagination, metrics         | ✅    |
 | 6     | Unit + integration tests (≥ 80% coverage)                      | ✅    |
-| 7     | Multi-stage Dockerfile, docker-compose, CI on every PR         | ⏳    |
+| 7     | Multi-stage Dockerfile, docker-compose, CI on every PR         | ✅    |
 | 8     | Deploy to AWS, public Swagger UI                               | ⏳    |
 
 ## Getting started
@@ -104,28 +106,56 @@ npm run test:coverage  # same, with a coverage report (fails under 80%)
 - **Isolation from your data:** tests never read `.env`; they always point at `triage_test`, and the reset helper refuses to truncate any database whose name doesn't end in `_test`.
 - **Why Vitest instead of Jest:** `jose` 6 and Kysely 0.29 ship only as ES modules. Jest's CommonJS module loader can't load them without transpiling `node_modules`, and `jose` fails inside Jest's sandbox. Vitest runs them natively with the same `describe`/`it`/`expect` API.
 
+## Docker
+
+The production image is built in stages: one compiles TypeScript with every dependency, the final one keeps only `dist/` and runtime dependencies on `node:24-alpine`, runs as the unprivileged `node` user and has a health check.
+
+```bash
+npm run docker:up     # PostgreSQL + migrations + the API, built from the Dockerfile
+curl -i http://localhost:8080/api/v1/health/ready
+npm run docker:logs   # JSON logs from the container
+npm run docker:down
+```
+
+- The containerized API listens on **8080** so it can run next to `npm run dev` (3000). Both use the same `triage` database.
+- Migrations run as a one-shot `migrate` service; the API only starts once they've succeeded.
+- `JWT_SECRET` comes from your `.env`; Compose refuses to start without it.
+
+## Continuous integration
+
+[GitHub Actions](.github/workflows/ci.yml) runs on every pull request and every push to `main`:
+
+1. `npm ci` (exactly what `package-lock.json` says)
+2. `npm run check`: types, ESLint, Prettier, OpenAPI contract
+3. `npm run test:coverage` against a PostgreSQL service container (fails under 80%)
+4. `npm run build`
+5. Builds the Docker image
+
 ## Scripts
 
-| Command                 | What it does                                             |
-| ----------------------- | -------------------------------------------------------- |
-| `npm run dev`           | Starts the API with hot reload and readable logs         |
-| `npm run build`         | Compiles TypeScript to `dist/`                           |
-| `npm start`             | Runs the compiled build                                  |
-| `npm run db:up`         | Starts PostgreSQL in Docker and waits until it's healthy |
-| `npm run db:down`       | Stops PostgreSQL (data is kept in a Docker volume)       |
-| `npm run db:migrate`    | Applies pending migrations                               |
-| `npm run db:rollback`   | Undoes the last migration                                |
-| `npm run db:seed`       | Replaces all data with sample data (never in production) |
-| `npm run db:reset`      | Rolls everything back, migrates and seeds again          |
-| `npm run db:psql`       | Opens a `psql` shell inside the database container       |
-| `npm run typecheck`     | Type-checks without emitting files                       |
-| `npm run lint`          | ESLint with type-aware rules                             |
-| `npm run format`        | Formats everything with Prettier                         |
-| `npm run lint:api`      | Validates `openapi.yaml` with Redocly                    |
-| `npm test`              | Runs unit and integration tests                          |
-| `npm run test:watch`    | Re-runs tests on every file change                       |
-| `npm run test:coverage` | Tests + coverage report (minimum 80%)                    |
-| `npm run check`         | All of the above checks, the same ones CI will run       |
+| Command                 | What it does                                                           |
+| ----------------------- | ---------------------------------------------------------------------- |
+| `npm run dev`           | Starts the API with hot reload and readable logs                       |
+| `npm run build`         | Compiles TypeScript to `dist/`                                         |
+| `npm start`             | Runs the compiled build                                                |
+| `npm run db:up`         | Starts PostgreSQL in Docker and waits until it's healthy               |
+| `npm run db:down`       | Stops PostgreSQL (data is kept in a Docker volume)                     |
+| `npm run db:migrate`    | Applies pending migrations                                             |
+| `npm run db:rollback`   | Undoes the last migration                                              |
+| `npm run db:seed`       | Replaces all data with sample data (never in production)               |
+| `npm run db:reset`      | Rolls everything back, migrates and seeds again                        |
+| `npm run db:psql`       | Opens a `psql` shell inside the database container                     |
+| `npm run docker:up`     | Builds the image and starts PostgreSQL + migrations + API on port 8080 |
+| `npm run docker:logs`   | Follows the API container's logs                                       |
+| `npm run docker:down`   | Stops every container (data is kept)                                   |
+| `npm run typecheck`     | Type-checks without emitting files                                     |
+| `npm run lint`          | ESLint with type-aware rules                                           |
+| `npm run format`        | Formats everything with Prettier                                       |
+| `npm run lint:api`      | Validates `openapi.yaml` with Redocly                                  |
+| `npm test`              | Runs unit and integration tests                                        |
+| `npm run test:watch`    | Re-runs tests on every file change                                     |
+| `npm run test:coverage` | Tests + coverage report (minimum 80%)                                  |
+| `npm run check`         | All of the above checks, the same ones CI will run                     |
 
 ## Project structure
 
