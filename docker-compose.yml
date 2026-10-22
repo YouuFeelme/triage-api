@@ -1,4 +1,17 @@
-# Local infrastructure. `npm run db:up` starts it, `npm run db:down` stops it (data is kept).
+# Local infrastructure.
+#   npm run db:up       -> only PostgreSQL (for `npm run dev` and the tests)
+#   npm run docker:up   -> PostgreSQL + migrations + the API built from the Dockerfile (profile "app")
+#   npm run docker:down -> stops everything (data is kept in the pgdata volume)
+
+# Settings shared by every container built from the Dockerfile.
+x-app-env: &app-env
+  NODE_ENV: production
+  LOG_LEVEL: info
+  # "db" is the database service's name: containers reach each other by service name.
+  DATABASE_URL: postgres://triage:triage@db:5432/triage
+  # Read from your .env file. Compose refuses to start if it's missing.
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in your .env file}
+
 services:
   db:
     image: postgres:17-alpine
@@ -19,6 +32,35 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # One-shot job: applies pending migrations, then exits. The API only starts if it succeeded.
+  migrate:
+    profiles: [app]
+    build: .
+    image: triage-api:local
+    command: ['node', 'dist/db/migrate.js', 'latest']
+    environment: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    profiles: [app]
+    build: .
+    image: triage-api:local
+    container_name: triage-api
+    # A tiny init process forwards signals and reaps zombie processes.
+    init: true
+    environment: *app-env
+    ports:
+      # 8080 on your Mac, so it doesn't clash with `npm run dev` on 3000.
+      - '8080:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   pgdata:
