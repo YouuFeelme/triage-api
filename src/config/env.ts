@@ -30,6 +30,9 @@ const envSchema = z
     REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(7),
     // bcrypt work factor. 12 in real life; tests use 4 so hundreds of hashes take milliseconds.
     BCRYPT_COST: z.coerce.number().int().min(4).max(15).default(12),
+    // Reverse proxies in front of the app (1 = Caddy in production). Never "trust everything":
+    // anyone could then fake their IP with an X-Forwarded-For header and dodge the rate limit.
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   })
   .refine((e) => !(e.NODE_ENV === 'production' && e.JWT_SECRET.startsWith('replace-me')), {
     message: 'still has the placeholder value from .env.example',
