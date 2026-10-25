@@ -1,0 +1,8 @@
+# HTTPS in front of the API. Caddy gets and renews the Let's Encrypt certificate for API_DOMAIN
+# (set in the server's .env) on its own, and redirects plain HTTP to HTTPS.
+# It also replaces any X-Forwarded-For sent by the client with the real client IP, which is why
+# the API can safely trust exactly one proxy hop.
+{$API_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:3000
+}

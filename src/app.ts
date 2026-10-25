@@ -1,6 +1,7 @@
 import cors from 'cors';
 import express, { type Express } from 'express';
 import helmet from 'helmet';
+import { env } from './config/env';
 import { errorHandler } from './middlewares/error-handler';
 import { notFound } from './middlewares/not-found';
 import { REQUEST_ID_HEADER } from './middlewares/request-id';
@@ -13,6 +14,11 @@ import { apiRouter } from './routes';
  */
 export function createApp(): Express {
   const app = express();
+
+  // Behind a reverse proxy (Caddy in production) req.ip would be the proxy's IP, and the login
+  // rate limit would count every user as one. Trusting exactly N hops makes req.ip the real
+  // client IP; 0 (the default) means clients connect directly, as with `npm run dev`.
+  app.set('trust proxy', env.TRUST_PROXY_HOPS);
 
   // Order matters: each request goes through these top to bottom.
   app.use(requestLogger); // 1. request ID + one log line per request

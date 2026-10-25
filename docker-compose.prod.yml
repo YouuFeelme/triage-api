@@ -1,0 +1,55 @@
+# Production overrides, layered on top of docker-compose.yml on the EC2 server.
+# The server's .env sets COMPOSE_FILE and COMPOSE_PROFILES, so there a plain
+# `docker compose up -d --build` is the same as:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
+#
+# What changes compared to your Mac:
+#   - Secrets (Postgres password, JWT secret) come from the server's .env, never from the repo.
+#   - Only Caddy publishes ports. Postgres and the API are reachable only inside Docker's network.
+#   - Caddy terminates HTTPS (automatic Let's Encrypt certificate) and forwards to the API.
+#   - Every service restarts by itself after a crash or a server reboot.
+
+x-prod-env:
+  &prod-env # Same database as the base file, but with the password from .env instead of "triage".
+  DATABASE_URL: postgres://triage:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/triage
+  # Exactly one proxy (Caddy) sits in front of the API. See src/app.ts.
+  TRUST_PROXY_HOPS: '1'
+
+services:
+  db:
+    environment:
+      # Only applied the first time the pgdata volume is created.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports: !reset []
+    restart: unless-stopped
+
+  migrate:
+    environment: *prod-env
+
+  api:
+    environment: *prod-env
+    ports: !reset []
+
+  caddy:
+    profiles: [app]
+    image: caddy:2-alpine
+    container_name: triage-caddy
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN in .env}
+    ports:
+      # 80: certificate challenge + redirect to HTTPS. 443: the public API.
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates live here. Keep this volume: Let's Encrypt limits how often you can ask again.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
